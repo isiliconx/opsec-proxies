@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>resiproxy</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#12151a; --panel2:#171b22; --line:#232a34;
+    --fg:#e6e9ee; --mut:#8a94a6; --acc:#5ac8fa; --ok:#3ddc97; --warn:#ffb020;
+    --bad:#ff5c5c; --res:#7c5cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  header{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;
+         align-items:baseline;gap:14px;background:var(--panel)}
+  header h1{margin:0;font-size:16px;letter-spacing:.5px}
+  header .sub{color:var(--mut);font-size:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+        gap:10px;padding:14px 18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .card .n{font-size:24px;font-weight:600}
+  .card .l{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.8px}
+  .A{color:var(--ok)} .B{color:var(--res)} .C{color:var(--warn)} .D{color:var(--bad)}
+  section{padding:0 18px 18px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);
+     margin:18px 0 8px;font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--mut);font-weight:500;font-size:11px;text-transform:uppercase}
+  tr:hover td{background:var(--panel2)}
+  input,textarea,select,button{font:inherit;background:var(--panel2);color:var(--fg);
+        border:1px solid var(--line);border-radius:6px;padding:7px 10px}
+  textarea{width:100%;min-height:110px;resize:vertical}
+  button{cursor:pointer;background:#1c2230;border-color:#2c3648}
+  button:hover{border-color:var(--acc)} button.go{background:#17313d;border-color:#245b6b}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+  code{background:var(--panel2);padding:2px 6px;border-radius:4px;color:var(--acc)}
+  .muted{color:var(--mut)} .ok{color:var(--ok)} .bad{color:var(--bad)}
+  .bar{height:5px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:6px}
+  .bar>i{display:block;height:100%;background:var(--acc)}
+  .pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;
+        border:1px solid var(--line);color:var(--mut)}
+  .res{border-color:var(--res);color:var(--res)}
+</style>
+</head>
+<body>
+<header>
+  <h1>resiproxy</h1>
+  <span class="sub">harvest &rarr; test &rarr; grade &rarr; route &nbsp;|&nbsp; <span id="up">offline</span></span>
+</header>
+
+<div class="grid" id="cards"></div>
+
+<section>
+  <h2>route</h2>
+  <div class="row">
+    <button class="go" onclick="act('serve')">start rotating listeners</button>
+    <button onclick="act('chrome')">launch Chrome through pool</button>
+    <button onclick="act('tunnel-dry')">tunnel plan (dry run)</button>
+    <button onclick="act('tunnel')">take over system traffic</button>
+  </div>
+  <div class="row muted" id="listeners"></div>
+</section>
+
+<section>
+  <h2>pool</h2>
+  <div class="row">
+    <select id="grade">
+      <option value="A">grade A only</option>
+      <option value="B" selected>grade B and up</option>
+      <option value="C">grade C and up</option>
+      <option value="all">everything alive</option>
+    </select>
+    <input id="cc" placeholder="countries, e.g. US,DE,JP" size="22">
+    <label class="muted"><input type="checkbox" id="nodc" checked> hide datacenter ASN</label>
+    <button onclick="loadPool()">load</button>
+    <input id="filter" placeholder="filter ip / asn / isp" size="24" oninput="render()">
+  </div>
+  <table><thead><tr>
+    <th>grade</th><th>proxy</th><th>exit ip</th><th>cc</th><th>asn</th>
+    <th>isp</th><th>lat</th><th>ok%</th><th>score</th><th>state</th>
+  </tr></thead><tbody id="pool"></tbody></table>
+</section>
+
+<section>
+  <h2>import your own parcels</h2>
+  <div class="row">
+    <textarea id="parcel" placeholder="one per line:  host:port | user:pass@host:port | socks5://user:pass@host:port&#10;or paste a csv / json / a curl -x command / a whole page"></textarea>
+  </div>
+  <div class="row">
+    <select id="pscheme">
+      <option value="auto">auto-detect scheme</option>
+      <option value="http">http</option><option value="https">https</option>
+      <option value="socks5">socks5</option><option value="socks4">socks4</option>
+    </select>
+    <input id="plabel" placeholder="parcel label" size="18" value="my-parcel">
+    <button class="go" onclick="importParcel()">import + test</button>
+    <button onclick="importOnly()">import only</button>
+    <span class="muted" id="pm"></span>
+  </div>
+  <table><thead><tr><th>#</th><th>label</th><th>count</th><th>status</th><th>passed</th><th>failed</th><th>when</th></tr></thead>
+    <tbody id="parcels"></tbody></table>
+</section>
+
+<section>
+  <h2>resi console</h2>
+  <pre id="log" class="muted" style="white-space:pre-wrap"></pre>
+</section>
+
+<script>
+let POOL=[], FILTER='';
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+function log(m){$('log').textContent = m + "\n" + $('log').textContent.split("\n").slice(0,40).join("\n");}
+async function api(p, o){const r=await fetch(p,o);const t=await r.text();
+  try{return JSON.parse(t)}catch{return t}}
+async function refresh(){
+  const s=await api('/api/status');
+  if(typeof s==='string'){$('up').textContent='service offline';return}
+  $('up').textContent = 'up ' + Math.round(s.uptime_s) + 's';
+  const g=s.grades||{}, d=s.db||{};
+  const c=[['pool',s.pool,''],['A',g.A||0,'A'],['B',g.B||0,'B'],['C',g.C||0,'C'],
+           ['known',d.total||0,''],['alive 1h',(d.verdicts_1h||{}).alive||0,''],
+           ['rotations',(s.rotator||{}).rotations||0,''],['healthy',(s.rotator||{}).healthy||0,'']];
+  $('cards').innerHTML=c.map(([l,n,cl])=>
+    `<div class="card"><div class="n ${cl}">${n}</div><div class="l">${l}</div></div>`).join('');
+  $('listeners').innerHTML = Object.entries(s.listeners||{}).map(([k,v])=>
+    `${k}: <code>${esc(v)}</code>`).join(' &nbsp; ');
+}
+async function loadPool(){
+  const p=new URLSearchParams({grade:$('grade').value, cc:$('cc').value, nodc:$('nodc').checked?'1':''});
+  const r=await api('/api/pool?'+p);
+  POOL=r.upstreams||[]; render(); log('loaded '+POOL.length+' upstreams');
+}
+function render(){
+  const f=FILTER.toLowerCase();
+  const rows=POOL.filter(u=>!f || JSON.stringify(u).toLowerCase().includes(f)).slice(0,400);
+  $('pool').innerHTML=rows.map(u=>`<tr>
+    <td class="${u.grade}">${u.grade}</td>
+    <td><code>${esc((u.meta&&u.meta.exit_ip)||'')}</code></td>
+    <td>${esc(u.proxy)}</td>
+    <td>${esc(u.cc)}</td><td>${esc(u.asn)}</td>
+    <td>${esc(((u.meta||{}).isp||'').slice(0,32))}</td>
+    <td>${Math.round((u.meta||{}).latency_ms||0)}ms</td>
+    <td>${Math.round(((u.meta||{}).ratio||0)*100)}%</td>
+    <td>${u.score}</td>
+    <td class="muted">${u.in_use?'in use ':''}${u.cooldown?('cool '+u.cooldown+'s'):''}</td></tr>`).join('');
+}
+async function act(a){
+  log('→ '+a);
+  const r=await api('/api/act/'+a,{method:'POST'});
+  log(typeof r==='string'?r:JSON.stringify(r,null,1));
+  refresh();
+}
+async function importOnly(){ await postParcel(false); }
+async function importParcel(){ await postParcel(true); }
+async function postParcel(test){
+  const body=$('parcel').value;
+  if(!body.trim())return;
+  $('pm').textContent='importing…';
+  const r=await api('/api/import',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:body,label:$('plabel').value,scheme:$('pscheme').value,test})});
+  $('pm').textContent = typeof r==='string'?r:(r.msg||JSON.stringify(r));
+  loadParcels(); refresh();
+}
+async function loadParcels(){
+  const r=await api('/api/parcels');
+  const ps=(r&&r.parcels)||[];
+  $('parcels').innerHTML=ps.map(p=>`<tr><td>${p.id}</td><td>${esc(p.label)}</td>
+    <td>${p.count}</td><td class="muted">${esc(p.status)}</td>
+    <td class="ok">${p.passed}</td><td class="bad">${p.failed}</td>
+    <td class="muted">${new Date(p.added*1000).toLocaleString()}</td></tr>`).join('');
+}
+$('filter').addEventListener('input',e=>{FILTER=e.target.value;render()});
+refresh(); loadParcels(); setInterval(refresh,3000);
+</script>
+</body>
+</html>

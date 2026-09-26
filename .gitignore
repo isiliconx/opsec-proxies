@@ -1,0 +1,25 @@
+# runtime state — the proxy db, harvested feeds, and the graded pool
+data/
+artifacts/
+inbox/
+
+# user parcels may carry credentials; keep them local
+*.txt
+!config/*.txt
+parcels/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+
+# os / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
