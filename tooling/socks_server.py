@@ -16,6 +16,9 @@ from .httpclient import (ConnectError, Endpoint, HTTPStatusError, ProxyError, Re
                          Session, _parse_status, _read_head, http_connect, http_open,
                          socks4_connect, socks5_connect, tunnel)
 import struct
+import logging
+
+log = logging.getLogger("resiproxy.listener")
 
 # Well-known ports, and ranges that are never a browser's proxy port.
 COMMON_PROXY_PORTS = {80, 81, 443, 3128, 8000, 8080, 8443, 10000, 1080, 2080, 3129, 8118, 8888, 9110, 8889}
@@ -275,8 +278,11 @@ class ProxyServer:
             # SOCKS5 success reply: VER REP RSV ATYP BND.ADDR BND.PORT
             writer.write(b"\x05\x00\x00\x01" + b"\x7f\x00\x00\x01" + struct.pack("!H", port))
             await writer.drain()
-            self.counters["bytes"] += await self._pump(u, *up, reader, writer)
-            self.rot.report(u, True, sid=sid)
+            nbytes, healthy = await self._pump(u, *up, reader, writer)
+            self.counters["bytes"] += nbytes
+            self.rot.report(u, healthy, "upstream dropped tunnel" if not healthy else "", sid)
+            if not healthy:
+                self.counters["upstream_err"] += 1
         except Exception as e:
             self.counters["upstream_err"] += 1
             self.counters["bind_fail"] += 1
@@ -334,8 +340,11 @@ class ProxyServer:
                 return
             writer.write(b"HTTP/1.1 200 Connection established\r\nProxy-Agent: resiproxy\r\n\r\n")
             await writer.drain()
-            self.counters["bytes"] += await self._pump(u, *up, reader, writer)
-            self.rot.report(u, True, sid=sid)
+            nbytes, healthy = await self._pump(u, *up, reader, writer)
+            self.counters["bytes"] += nbytes
+            self.rot.report(u, healthy, "upstream dropped tunnel" if not healthy else "", sid)
+            if not healthy:
+                self.counters["upstream_err"] += 1
             writer.close()
             return
         # absolute URL: parse host, rebuild origin-form
@@ -377,8 +386,11 @@ class ProxyServer:
                     raise ConnectError(f"upstream {code}")
                 writer.write(first_resp)
                 await writer.drain()
-                self.counters["bytes"] += await self._pump(u, *up, reader, writer)
-                self.rot.report(u, True, sid=sid)
+                nbytes, healthy = await self._pump(u, *up, reader, writer)
+                self.counters["bytes"] += nbytes
+                self.rot.report(u, healthy, "upstream dropped tunnel" if not healthy else "", sid)
+                if not healthy:
+                    self.counters["upstream_err"] += 1
                 return
             except Exception as e:
                 self.counters["upstream_err"] += 1
@@ -448,40 +460,68 @@ class ProxyServer:
         except Exception:
             return None
 
-    async def _pump(self, u: Upstream, up_r, up_w, cli_r: asyncio.StreamReader, cli_w: asyncio.StreamWriter) -> int:
-        """Bidirectional splice. Returns bytes moved."""
+    async def _pump(self, u: Upstream, up_r, up_w, cli_r: asyncio.StreamReader, cli_w: asyncio.StreamWriter) -> tuple[int, bool]:
+        """Bidirectional splice. Returns (bytes moved, upstream_healthy).
+
+        upstream_healthy is False when the upstream side ended first or errored
+        while the client was still sending: that is a dead upstream, and the
+        caller must mark it failed rather than report a success. Without this
+        a proxy that drops the tunnel mid-connection is recorded as healthy and
+        keeps getting picked.
+        """
         total = 0
+        state = {"upstream_dead": False, "client_dead": False}
 
         async def c2u():
             nonlocal total
             while True:
                 try:
                     data = await asyncio.wait_for(cli_r.read(16384), 120)
-                except (asyncio.TimeoutError, Exception):
+                except asyncio.TimeoutError:
+                    break
+                except Exception:
+                    state["client_dead"] = True
                     break
                 if not data:
+                    state["client_dead"] = True
                     break
                 total += len(data)
-                up_w.write(data)
-                await up_w.drain()
+                try:
+                    up_w.write(data)
+                    await up_w.drain()
+                except Exception:
+                    state["upstream_dead"] = True
+                    break
 
         async def u2c():
             nonlocal total
             while True:
                 try:
                     data = await asyncio.wait_for(up_r.read(16384), 120)
+                except asyncio.TimeoutError:
+                    break
                 except Exception:
+                    state["upstream_dead"] = True
                     break
                 if not data:
+                    # clean EOF from the upstream while the client still has data
+                    # to send means the proxy hung up on us
+                    state["upstream_dead"] = not state["client_dead"]
                     break
                 total += len(data)
-                cli_w.write(data)
-                await cli_w.drain()
+                try:
+                    cli_w.write(data)
+                    await cli_w.drain()
+                except Exception:
+                    state["client_dead"] = True
+                    break
 
         t1 = asyncio.create_task(c2u())
         t2 = asyncio.create_task(u2c())
         try:
-            await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
         finally:
             for t in (t1, t2):
                 t.cancel()
@@ -489,7 +529,7 @@ class ProxyServer:
                 up_w.close()
             except Exception:
                 pass
-        return total
+        return total, not state["upstream_dead"]
 
 
 async def http_connect_pub(ep: Endpoint, host: str, port: int, timeout: float):

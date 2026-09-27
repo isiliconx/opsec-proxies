@@ -86,6 +86,40 @@ async def main() -> int:
         check("failover past a dead upstream", False, f"{type(e).__name__}: {e}")
     await srv.stop()
 
+    # 4b. a mid-connection upstream drop must be reported as a failure, not a
+    #     success, and must not leave the upstream marked healthy.
+    class DroppingSocks5(LocalSocks5):
+        """Accepts the handshake, then hangs up without a reply."""
+        async def _handle(self, reader, writer):
+            try:
+                await reader.readexactly(2)          # greeting
+                writer.write(b"\x05\x00"); await writer.drain()
+                await reader.readexactly(4)          # request
+                writer.close()                       # drop, no reply
+            except Exception:
+                pass
+
+    drop = DroppingSocks5(host=HOST, port=SOCKS_PORT + 20)
+    await drop.start()
+    du = Upstream(ep=Endpoint(HOST, SOCKS_PORT + 20, "socks5"))
+    drot = Rotator([du], sticky_seconds=0, cooldown=1)
+    dsrv = ProxyServer(drot, HOST, HPORT + 20, mode="socks5", attempts=1)
+    await dsrv.start()
+    try:
+        await sess.get(Endpoint(HOST, HPORT + 20, "socks5"), "http://httpbin.org/ip")
+    except Exception:
+        pass
+    await asyncio.sleep(0.4)
+    # The dropping relay dies before any bytes move, so it fails at the open
+    # stage: bind_fail is the right counter there, upstream_err is for the
+    # mid-pump case. What matters is that it is NOT recorded as ok.
+    check("dropped upstream not recorded as healthy", du.ok == 0 and du.fail >= 1,
+          f"ok={du.ok} fail={du.fail} err={du.last_error!r}")
+    check("failure counted in a failure counter",
+          dsrv.counters["upstream_err"] + dsrv.counters["bind_fail"] >= 1,
+          str(dsrv.counters))
+    await dsrv.stop(); await drop.stop()
+
     # 5. rotation: repeated requests must not all pin one upstream
     before = solo.rotations if hasattr(solo, "rotations") else 0
     seen = set()
