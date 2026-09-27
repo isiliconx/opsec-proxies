@@ -45,9 +45,17 @@ class Upstream:
         return self.cooldown_until <= now
 
     def health(self) -> float:
+        """Live health in [0,1].
+
+        ok/total is the running success rate once we have data. Before that,
+        fall back to the tester's own success_ratio from the db rather than a
+        flat 0.5: a pool of never-used upstreams all scoring 0.5 gives the
+        rotator no signal at all and the weighted pick degenerates into a
+        uniform lottery over mostly-dead proxies.
+        """
         total = self.ok + self.fail
         if total == 0:
-            return 0.5
+            return max(0.05, min(1.0, self.score if self.score else 0.5))
         return (self.ok / total) * max(0.0, 1.0 - min(1.0, (time.time() - self.last_ok) / 300.0))
 
 
@@ -55,12 +63,14 @@ class Rotator:
     """Weighted round-robin over healthy upstreams with sticky sessions."""
 
     def __init__(self, upstreams: list[Upstream], sticky_seconds: int = 300, cooldown: int = 120,
-                 failover: bool = True, strategy: str = "health"):
+                 failover: bool = True, strategy: str = "health", window_pct: float = 0.3):
         self.pool = upstreams
         self.sticky_seconds = sticky_seconds
         self.cooldown = cooldown
         self.failover = failover
         self.strategy = strategy
+        # Fraction of the ranked pool the weighted pick draws from.
+        self.window_pct = max(0.01, min(1.0, float(window_pct)))
         self._sticky: dict[str, Upstream] = {}
         self._rr = 0
         self.rotations = 0
@@ -92,10 +102,13 @@ class Rotator:
         if not live:
             return None
         live = [u for u in live if u.ep.key not in exclude] or live
-        # top 30% by health, weighted random inside it
-        window = max(1, min(len(live), int(len(live) * 0.3) + 1))
-        top = live[:window]
-        weights = [max(0.01, u.health() * (0.5 + u.score)) for u in top]
+        # Prefer the healthy end of the pool, but keep some spread so a single
+        # upstream does not carry every connection. The window is a percentage
+        # of the pool, and the weight is health^2 so the gap between a 0.9 and
+        # a 0.2 upstream is decisive rather than decorative.
+        span = max(1, int(len(live) * self.window_pct))
+        top = live[:span]
+        weights = [max(0.01, u.health() ** 2) for u in top]
         u = random.choices(top, weights=weights, k=1)[0]
         self.rotations += 1
         if session_id:

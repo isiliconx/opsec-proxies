@@ -13,7 +13,7 @@ from pathlib import Path
 
 from tooling.config import Cfg
 from tooling.db import DB
-from tooling.httpclient import Endpoint
+from tooling.httpclient import Endpoint, Session
 from tooling import logging_util as lu
 from tooling.socks_server import ProxyServer, Rotator, Upstream
 from tooling.pac import build_pac
@@ -30,10 +30,24 @@ def pool_from_db(db: DB, cfg: Cfg, min_grade: str = "B", countries: str = "",
         u = Upstream(ep=ep, country=r["cc"] or "", asn=r["asn"] or "", grade=r["grade"] or "C")
         ratio = float(r["success_ratio"] or 0)
         lat = float(r["latency_ms"] or 9999)
-        u.score = round(ratio * 2.0 + max(0.0, 2.0 - lat / 1500.0), 3)
-        u.ok = 1 if ratio >= 0.5 else 0
-        u.last_ok = float(r["tested_at"] or 0)
-        u.meta = {"exit_ip": r["exit_ip"], "isp": r["isp"], "ratio": ratio, "latency_ms": lat}
+        # score carries the tester's measured success ratio so a never-used
+        # upstream still has a real rank instead of a flat default.
+        u.score = round(ratio, 3)
+        # Seed the live counters from the measured ratio, not a binary
+        # ok/fail guess: setting ok=1 whenever ratio>=0.5 made every upstream
+        # in a low-ratio pool look perfect to health(), so the rotator had no
+        # signal and the weighted pick became a lottery over dead proxies.
+        ok = ratio * 10
+        u.ok = int(ok)
+        u.fail = int(round(10 - ok))
+        # last_ok must mean "when this last worked", and a db row from an
+        # hour ago does not. Seeding it with tested_at made the recency decay
+        # in health() floor to zero for every upstream, which is the same flat
+        # ranking in a different direction. Let the live counters own it and
+        # start every entry equally fresh; the health check then separates them.
+        u.last_ok = time.time()
+        u.meta = {"exit_ip": r["exit_ip"], "isp": r["isp"], "ratio": ratio, "latency_ms": lat,
+                  "tested_at": r["tested_at"]}
         out.append(u)
     return out
 
@@ -56,11 +70,32 @@ class ResiService:
         self.api: asyncio.Server | None = None
         self.api_port = int(cfg.path("egress.api_port", 8770))
         self.pac_port = int(cfg.path("egress.pac_port", 8771))
-        self.refresh_every = 60.0
+        # The pool refresh must be slower than the health check, or every
+        # refresh resets the very counters the health check just built up.
+        self.refresh_every = max(60.0, float(self.cfg.path("egress.health_check_interval", 30)) * 3)
         self._last_refresh = 0.0
+        self._health_task: asyncio.Task | None = None
 
     def load_pool(self) -> int:
+        # Carry live ok/fail/cooldown across a refresh. Rebuilding the rotator
+        # from the db alone throws away everything the health loop has learned
+        # and puts every upstream back on the flat seed ratio, which is what
+        # made the pool oscillate instead of converging.
+        prior: dict[str, Upstream] = {}
+        if self.rot is not None:
+            for u in self.rot.pool:
+                prior[u.ep.key] = u
         self.upstreams = pool_from_db(self.db, self.cfg, self.min_grade, self.countries, self.exclude_dc)
+        if prior:
+            for u in self.upstreams:
+                old = prior.get(u.ep.key)
+                if old is None:
+                    continue
+                u.ok += old.ok
+                u.fail += old.fail
+                u.last_ok = max(u.last_ok, old.last_ok)
+                if old.cooldown_until > u.cooldown_until:
+                    u.cooldown_until = old.cooldown_until
         self.rot = Rotator(self.upstreams,
                            sticky_seconds=int(self.cfg.path("egress.sticky_seconds", 300)),
                            cooldown=int(self.cfg.path("egress.cooldown_seconds", 120)),
@@ -80,6 +115,7 @@ class ResiService:
         await self.socks.start()
         await self.mixed.start()
         await self._start_api()
+        self._health_task = asyncio.create_task(self.health_loop())
         self.started = time.time()
         log.info("listening: socks5 %s:%d   http  %s:%d   api  http://%s:%d",
                  self.host, self.socks_port, self.host, self.mixed_port, self.host, self.api_port)
@@ -89,6 +125,52 @@ class ResiService:
         self.api = await asyncio.start_server(self._api_client, self.host, self.api_port)
         pac = build_pac("socks5", self.host, self.socks_port)
         (self.cfg.abspath(self.cfg.path("paths.artifacts", "artifacts")) / "proxy.pac").write_text(pac, encoding="utf-8")
+
+    # ------------------------------------------------------------- self-heal
+    async def health_loop(self) -> None:
+        """Actively re-probe the pool and demote what is actually dead.
+
+        A harvested open-proxy pool is roughly half dead within minutes, and
+        no amount of ranking fixes that: the listener keeps drawing from
+        whatever the db last said. This probes a slice of the pool on an
+        interval, feeds the result into the same ok/fail counters the rotator
+        ranks on, and pushes anything that fails repeatedly into cooldown, so
+        the pool converges on the entries that still work.
+        """
+        interval = float(self.cfg.path("egress.health_check_interval", 30))
+        width = int(self.cfg.path("egress.healthcheck_batch", 24))
+        if interval <= 0:
+            return
+        log.info("health loop: every %.0fs, %d probes", interval, width)
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                if not self.upstreams or self.rot is None:
+                    continue
+                # probe the least-recently-verified slice, so the whole pool
+                # gets covered over time rather than the same head forever
+                ranked = self.rot._ranked()
+                if not ranked:
+                    continue
+                batch = (ranked[-width:] if len(ranked) > width else ranked)
+                judge = self.cfg.path("tester.judge_url", "http://httpbin.org/ip")
+                probe = Session(timeout=12, pool_size=1)
+                good = 0
+                for u in batch:
+                    try:
+                        r = await probe.get(u.ep, judge)
+                        ok = r.status == 200
+                    except Exception:
+                        ok = False
+                    self.rot.report(u, ok, "" if ok else "healthcheck failed")
+                    good += 1 if ok else 0
+                await probe.close()
+                if good:
+                    log.info("health check: %d/%d upstreams verified good", good, len(batch))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.debug("health loop error: %s", e)
 
     async def _api_client(self, reader, writer) -> None:
         from tooling.httpclient import _read_head, _parse_status
@@ -193,6 +275,8 @@ class ResiService:
                     log.info("pool refreshed: %d -> %d upstreams", old, len(self.upstreams))
 
     async def stop(self) -> None:
+        if self._health_task:
+            self._health_task.cancel()
         if self.socks:
             await self.socks.stop()
         if self.mixed:

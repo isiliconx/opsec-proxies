@@ -260,7 +260,11 @@ class Tester:
             return res
         if any(k in banner.lower() for k in self.class_kw.get("relay_banner_keywords", [])):
             res.evidence["relay_banner"] = True
-        # quality samples
+        # Quality samples. This measures RELIABILITY, so it must run every
+        # sample: the old code broke out on the first exit_ip it saw, which
+        # made success_ratio identically 1/samples (0.2) for every alive proxy
+        # and left the pool with no ranking signal at all. One sample is enough
+        # to prove liveness; several are needed to prove it holds.
         t0 = time.perf_counter()
         oks = 0
         for i in range(self.samples):
@@ -269,13 +273,16 @@ class Tester:
                 d = await self.judge(res.ep)
                 if d.get("exit_ip"):
                     oks += 1
-                    res.exit_ip = d["exit_ip"]
-                    res.anonymity = d.get("anonymity_score", 0.0)
-                    res.evidence.setdefault("judge", d)
-                    res.latency_ms = d.get("latency_ms", 0.0)
-                    break
+                    if not res.exit_ip:
+                        res.exit_ip = d["exit_ip"]
+                        res.anonymity = d.get("anonymity_score", 0.0)
+                        res.evidence.setdefault("judge", d)
+                        res.latency_ms = d.get("latency_ms", 0.0)
             except Exception:
                 pass
+            if i + 1 < self.samples:
+                # small gap so 5 samples aren't 5 requests in one burst
+                await asyncio.sleep(0.25)
         res.samples = self.samples
         res.success_ratio = oks / max(1, self.samples)
         if not res.exit_ip:
