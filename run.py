@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tooling.config import load, ensure_dirs
 from tooling.db import DB
-from tooling.httpclient import Endpoint
+from tooling.httpclient import Endpoint, Session
 from tooling.parcel import ParcelImporter
 from tooling.pac import build_pac
 from tooling import logging_util as lu
@@ -179,6 +179,59 @@ def cmd_import(a) -> int:
         for r in results:
             asyncio.run(_test(c, rows=imp.parcel_rows(r.parcel_id)))
     db.close()
+    return 0
+
+
+async def _peer(c, networks=None, test=False) -> int:
+    """Pull residential exits from peer networks into parcels, then optionally grade."""
+    from recon.peer import collect
+    from tooling.parcel import ParcelImporter
+    db = DB(c.abspath(c.path("paths.db")))
+    imp = ParcelImporter(c, db)
+    sess = Session(timeout=20, pool_size=2)
+    try:
+        batches = await collect(sess, networks or None)
+    finally:
+        await sess.close()
+    print()
+    added = 0
+    parcel_ids = []
+    for b in batches:
+        print("  " + b.summary())
+        if not b.ok or not b.lines:
+            continue
+        res = imp.import_text("\n".join(b.lines), f"peer:{b.network}", "auto")
+        added += res.unique
+        parcel_ids.append(res.parcel_id)
+        print(f"     -> parcel #{res.parcel_id}: parsed={res.parsed} unique={res.unique}")
+    print(f"\n{added} unique endpoints imported from peer networks")
+    if test and parcel_ids:
+        print("\n=== grading peer parcels ===")
+        for pid in parcel_ids:
+            await _test(c, rows=imp.parcel_rows(pid))
+    db.close()
+    return 0
+
+
+def cmd_peer(a) -> int:
+    c = _cfg()
+    asyncio.run(_peer(c, a.network or None, a.test))
+    return 0
+
+
+def cmd_maintain(a) -> int:
+    from maintain import Maintainer
+    c = _cfg()
+    m = Maintainer(c)
+    try:
+        if a.peer_only:
+            asyncio.run(m.pull_peer())
+        else:
+            asyncio.run(m.run(once=a.once))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        m.close()
     return 0
 
 
@@ -344,6 +397,14 @@ def main() -> int:
         choices=["auto", "http", "https", "socks4", "socks5"]); im.add_argument("--test", action="store_true")
     tp = sub.add_parser("test-parcel"); tp.add_argument("id", type=int)
 
+    pr = sub.add_parser("peer", help="pull residential exits from configured peer networks")
+    pr.add_argument("--network", nargs="*", default=[], help="honeygain packethive traffmonetizer brightdata")
+    pr.add_argument("--test", action="store_true", help="grade them immediately")
+
+    mn = sub.add_parser("maintain", help="run the maintain daemon (peer pull + test + revalidate + harvest)")
+    mn.add_argument("--once", action="store_true")
+    mn.add_argument("--peer-only", action="store_true")
+
     sv = sub.add_parser("serve")
     sv.add_argument("--grade", default="B", choices=["A", "B", "C", "all"])
     sv.add_argument("--countries", default="")
@@ -375,6 +436,7 @@ def main() -> int:
     return {
         "setup": cmd_setup, "harvest": cmd_harvest, "test": cmd_test, "pipeline": cmd_pipeline,
         "import": cmd_import, "test-parcel": cmd_test_parcel, "serve": cmd_serve, "chrome": cmd_chrome,
+        "peer": cmd_peer, "maintain": cmd_maintain,
         "tunnel": cmd_tunnel, "pac": cmd_pac, "pick": cmd_pick, "stats": cmd_stats,
         "export": cmd_export, "ui": cmd_ui,
     }[a.cmd](a)

@@ -214,6 +214,21 @@ class DB:
             self._conn.commit()
             return cur.lastrowid
 
+    def age_hours(self, proxy_id: int) -> float | None:
+        """Hours since this proxy was last tested, or None if never tested."""
+        r = self._conn.execute(
+            "select max(at) from tests where proxy_id = ?", (proxy_id,)).fetchone()
+        if not r or not r[0]:
+            return None
+        return (time.time() - float(r[0])) / 3600.0
+
+    def untested(self, limit: int = 1000) -> list[int]:
+        """Proxy ids that have never been through the tester, oldest first."""
+        rows = self._conn.execute(
+            "select p.id from proxies p left join tests t on t.proxy_id = p.id"
+            " where t.id is null order by p.first_seen limit ?", (limit,)).fetchall()
+        return [r[0] for r in rows]
+
     def best_grade(self, proxy_id: int, min_ratio: float = 0.0) -> str:
         """Best grade in the last 6 hours that still meets the ratio floor."""
         since = time.time() - 6 * 3600

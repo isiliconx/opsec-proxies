@@ -407,5 +407,27 @@
     "max_log_age_days": 7,
     "user_agent_pool": "data/ua.txt",
     "no_credential_persist": true
+  },
+  "maintain": {
+    "_comment": "maintain.py daemon. peer networks churn fastest so they pull often; public lists move slowly. revalidate keeps 'alive' meaning 'alive recently' rather than 'alive in March'.",
+    "peer_every": 900,
+    "harvest_every": 7200,
+    "test_new_every": 600,
+    "revalidate_every": 1800,
+    "revalidate_window_h": 2.0,
+    "test_batch": 400,
+    "min_grade": "C",
+    "networks": [],
+    "do_harvest": true
+  },
+  "peer_networks": {
+    "_comment": "Credentials come from the environment, never from this file. RESI_HONEYGAIN_API_KEY, RESI_PACKETHIVE_API_KEY, RESI_TRAFFMONETIZER_API_KEY, RESI_BRIGHTDATA_AUTH (user:pass), RESI_BRIGHTDATA_HOST.",
+    "enabled": [
+      "honeygain",
+      "packethive",
+      "traffmonetizer",
+      "brightdata"
+    ],
+    "poll_note": "recon/peer.py: pull into the normal parcel path, one parcel per network so pass/fail is attributable"
   }
 }
