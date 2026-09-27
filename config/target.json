@@ -185,9 +185,9 @@
     ]
   },
   "tester": {
-    "_comment": "Three-stage verification. Stage 0 is a raw TCP pre-filter that kills most junk cheaply.",
+    "_comment": "Three-stage verification. Stage 0 is a raw TCP pre-filter that kills most junk cheaply. tcp_timeout must cover a residential handshake across distance (measured 1.2-4.4s on ISP proxies), not a datacentre RTT.",
     "concurrency": 900,
-    "tcp_timeout": 3.0,
+    "tcp_timeout": 9.0,
     "http_timeout": 8.0,
     "quality_samples": 3,
     "judge_url": "http://httpbin.org/ip",

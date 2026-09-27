@@ -91,8 +91,7 @@ async def _test(c, limit=None, since_h=0, origin=None, rows=None):
     db = DB(c.abspath(c.path("paths.db")))
     me = await our_exit_ip(c)
     print(f"[test] your exit ip: {me or 'unknown'}")
-    t = Tester(c, db)
-    t.tp.our_ip = me
+    t = Tester(c, db, me)
     src = rows if rows is not None else list(db.iter_proxies(since=(time.time() - since_h * 3600) if since_h else None,
                                                             origin=origin))
     jobs = _build_queue(c, src)
@@ -133,8 +132,7 @@ async def _pipeline(c, limit=None):
     await pe.close()
     print("\n=== stage 3: test + grade ===")
     me = await our_exit_ip(c)
-    t = Tester(c, db)
-    t.tp.our_ip = me
+    t = Tester(c, db, me)
     jobs = _build_queue(c, list(db.iter_proxies()))
     if limit:
         jobs = jobs[:limit]

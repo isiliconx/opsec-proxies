@@ -15,7 +15,7 @@ sys.path.insert(0, ".")
 from tooling.config import load, ensure_dirs
 from tooling.db import DB
 from tooling.httpclient import Endpoint
-from vuln.tester import Tester, as_row
+from vuln.tester import Tester, as_row, our_exit_ip
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--n", type=int, default=40)
@@ -33,15 +33,15 @@ print(f"re-testing {len(rows)} known-alive upstreams with {a.samples} samples ea
 
 
 async def main() -> int:
-    t = Tester(cfg, db)
-    us = getattr(t, "our_ip", "") or ""
+    us = await our_exit_ip(cfg)
+    t = Tester(cfg, db, us)
     ratios = []
     for r in rows:
         res = await t.test_one(as_row(r))
         if res.verdict in ("alive", "slow"):
             ratios.append((res.success_ratio, res.latency_ms, res.ep.url(), res.exit_ip))
             print(f"  {res.success_ratio:.2f}  {res.latency_ms:>6.0f}ms  {res.ep.url():<38} exit={res.exit_ip}")
-    db.flush()
+    db.commit()
     print(f"\n{len(ratios)} alive")
     if ratios:
         import collections

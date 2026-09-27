@@ -119,9 +119,10 @@ class TestResult:
 
 
 class Tester:
-    def __init__(self, cfg: Cfg, db: DB):
+    def __init__(self, cfg: Cfg, db: DB, our_ip: str = ""):
         self.cfg = cfg
         self.db = db
+        self.our_ip = our_ip or ""
         self.conc = int(cfg.path("tester.concurrency", 900))
         self.tcp_to = float(cfg.path("tester.tcp_timeout", 3.0))
         self.http_to = float(cfg.path("tester.http_timeout", 8.0))
@@ -143,7 +144,11 @@ class Tester:
         self.executor = self.res._executor
         self.res.set_loop(asyncio.get_event_loop_policy().get_event_loop())
         self.geo.sess.executor = self.executor
-        self.tp = TransparencyProbe("", self.judge_url, self.http_to)
+        # our_ip must be our REAL exit ip. With an empty string the probe can
+        # never set same_as_me, so tester.require_ip_change is dead code and a
+        # fully transparent proxy (one that returns our own address as the
+        # "exit") grades C instead of D. run.py computes it and passes it in.
+        self.tp = TransparencyProbe(self.our_ip, self.judge_url, self.http_to)
         self.tp.sess.executor = self.executor
         self.capture = CaptureCheck(self.http_to)
         self.capture.sess.executor = self.executor
@@ -252,6 +257,21 @@ class Tester:
             return "C" if s >= 3.0 else "D"
         return "C" if s >= 3.0 else "D"
 
+    async def ensure_our_ip(self) -> str:
+        """Resolve our real exit ip once, if the caller did not supply it.
+
+        Without this the probe compares against the empty string, same_as_me is
+        never set, and tester.require_ip_change silently never fires.
+        """
+        if not self.our_ip:
+            try:
+                self.our_ip = await self.tp.our_exit_ip()
+                self.tp.our_ip = self.our_ip
+                log.info("our exit ip: %s", self.our_ip)
+            except Exception as e:
+                log.warning("could not resolve our exit ip: %s", e)
+        return self.our_ip
+
     # ----------------------------------------------------------------- driver
     def _capped(self, row) -> TestResult:
         """Grade a candidate that ran out of wall clock.
@@ -336,6 +356,7 @@ class Tester:
     async def run(self, rows: Iterable, write: bool = True, progress_every: int = 500,
                   on_result=None) -> list[TestResult]:
         rows = [as_row(r) for r in rows]
+        await self.ensure_our_ip()
         t0 = time.time()
         results: list[TestResult] = []
         self.stats = {"tried": 0, "tcp_ok": 0, "alive": 0, "graded": {}, "A": 0, "B": 0, "C": 0, "D": 0}

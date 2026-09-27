@@ -19,7 +19,7 @@ from tooling.config import load, ensure_dirs
 from tooling.db import DB
 from tooling.httpclient import Endpoint
 from types import SimpleNamespace
-from vuln.tester import Tester
+from vuln.tester import Tester, our_exit_ip
 
 ap = argparse.ArgumentParser()
 ap.add_argument("targets", nargs="*", help="host:port or scheme://host:port")
@@ -50,7 +50,9 @@ def parse(item: str):
 
 
 async def main() -> int:
-    t = Tester(cfg, db)
+    me = await our_exit_ip(cfg)
+    print(f"our exit ip: {me or 'unknown'}")
+    t = Tester(cfg, db, me)
     print(f"cap={t.per_candidate_cap:.0f}s  samples={a.samples}  max_lat={t.max_lat:.0f}ms\n")
     rows = []
     for item in raw:
@@ -66,7 +68,7 @@ async def main() -> int:
               f"{r.cc or '-'} host={r.hosting} tls={r.tls_ok} {wall:>6.1f}s  {r.isp or ''}")
         if r.error and r.verdict not in ("alive", "slow"):
             print(f"        {r.error[:100]}")
-    db.flush()
+    db.commit()
     print()
     print("grades:", dict(Counter(r.grade for r in rows)))
     print("alive :", sum(1 for r in rows if r.verdict in ("alive", "slow")))

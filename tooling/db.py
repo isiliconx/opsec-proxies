@@ -129,6 +129,18 @@ class DB:
             self._conn.executescript(SCHEMA)
             self._conn.commit()
 
+    def commit(self) -> None:
+        """Commit the WAL. Callers that build their own results must call this
+        or the rows are lost when the process exits."""
+        with self._lock:
+            try:
+                self._conn.commit()
+            except Exception:
+                pass
+
+    # long-standing name used by the standalone tools
+    flush = commit
+
     def close(self) -> None:
         with self._lock:
             try:
