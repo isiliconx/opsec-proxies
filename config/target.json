@@ -1,13 +1,11 @@
 {
   "_comment": "resiproxy master config. Every stage reads this. Edit, don't hardcode.",
-
   "paths": {
     "db": "data/resi.db",
     "harvest_raw": "data/harvest",
     "artifacts": "artifacts",
     "browser_profile": "data/chrome-profile"
   },
-
   "harvest": {
     "_comment": "Public open-residential / open-proxy sources. disabled:true sources are skipped.",
     "concurrency": 48,
@@ -16,69 +14,340 @@
     "allow_range_feeds": true,
     "max_range_lines_per_feed": 4000,
     "sources": [
-      { "name": "proxyscrape-http",    "enabled": true,  "kind": "text",  "url": "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all" },
-      { "name": "proxyscrape-socks5",  "enabled": true,  "kind": "text",  "url": "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all" },
-      { "name": "proxyscrape-socks4",  "enabled": true,  "kind": "text",  "url": "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4&timeout=10000&country=all" },
-      { "name": "proxifly-all",        "enabled": true,  "kind": "url",   "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.txt" },
-      { "name": "proxifly-http",       "enabled": true,  "kind": "url",   "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt" },
-      { "name": "proxifly-socks4",     "enabled": true,  "kind": "url",   "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt" },
-      { "name": "proxifly-socks5",     "enabled": true,  "kind": "url",   "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt" },
-      { "name": "hookzof-socks5",      "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt" },
-      { "name": "mmpx12-socks5",       "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt" },
-      { "name": "mmpx12-socks4",       "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt" },
-      { "name": "proxynova-us",        "enabled": true,  "kind": "html",  "url": "https://www.proxynova.com/proxy-server-list/country-us/" },
-      { "name": "proxynova-de",        "enabled": true,  "kind": "html",  "url": "https://www.proxynova.com/proxy-server-list/country-de/" },
-      { "name": "openproxylist-raw",   "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt" },
-      { "name": "jetkai-http",         "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt" },
-      { "name": "jetkai-https",        "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt" },
-      { "name": "monosans-http",       "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt" },
-      { "name": "monosans-socks4",     "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt" },
-      { "name": "monosans-socks5",     "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt" },
-      { "name": "thespeedx-http",      "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt" },
-      { "name": "thespeedx-socks4",    "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt" },
-      { "name": "thespeedx-socks5",    "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt" },
-      { "name": "shiftytr-http",       "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt" },
-      { "name": "vakhov-http",         "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt" },
-      { "name": "vakhov-https",        "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/https.txt" },
-      { "name": "zloi-hideip-http",    "enabled": true,  "kind": "crlf",  "url": "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt" },
-      { "name": "iplocate-isp-range",  "enabled": true,  "kind": "range", "url": "https://raw.githubusercontent.com/elliottophellia/yakumo/master/results/stream/ISP/US/all.txt" },
-      { "name": "iplocate-mobile",     "enabled": true,  "kind": "range", "url": "https://raw.githubusercontent.com/elliottophellia/yakumo/master/results/stream/MOBILE/US/all.txt" },
-      { "name": "ISP-mass-range",      "enabled": false, "kind": "range", "url": "https://raw.githubusercontent.com/elliottophellia/yakumo/master/results/stream/HOSTING/US/all.txt" }
+      {
+        "name": "proxyscrape-http",
+        "enabled": true,
+        "kind": "text",
+        "url": "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all"
+      },
+      {
+        "name": "proxyscrape-socks5",
+        "enabled": true,
+        "kind": "text",
+        "url": "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all"
+      },
+      {
+        "name": "proxyscrape-socks4",
+        "enabled": true,
+        "kind": "text",
+        "url": "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4&timeout=10000&country=all"
+      },
+      {
+        "name": "proxifly-all",
+        "enabled": true,
+        "kind": "url",
+        "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.txt"
+      },
+      {
+        "name": "proxifly-http",
+        "enabled": true,
+        "kind": "url",
+        "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt"
+      },
+      {
+        "name": "proxifly-socks4",
+        "enabled": true,
+        "kind": "url",
+        "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt"
+      },
+      {
+        "name": "proxifly-socks5",
+        "enabled": true,
+        "kind": "url",
+        "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt"
+      },
+      {
+        "name": "hookzof-socks5",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"
+      },
+      {
+        "name": "mmpx12-socks5",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt"
+      },
+      {
+        "name": "mmpx12-socks4",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt"
+      },
+      {
+        "name": "proxynova-us",
+        "enabled": true,
+        "kind": "html",
+        "url": "https://www.proxynova.com/proxy-server-list/country-us/"
+      },
+      {
+        "name": "proxynova-de",
+        "enabled": true,
+        "kind": "html",
+        "url": "https://www.proxynova.com/proxy-server-list/country-de/"
+      },
+      {
+        "name": "openproxylist-raw",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt"
+      },
+      {
+        "name": "jetkai-http",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt"
+      },
+      {
+        "name": "jetkai-https",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt"
+      },
+      {
+        "name": "monosans-http",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt"
+      },
+      {
+        "name": "monosans-socks4",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt"
+      },
+      {
+        "name": "monosans-socks5",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt"
+      },
+      {
+        "name": "thespeedx-http",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+      },
+      {
+        "name": "thespeedx-socks4",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt"
+      },
+      {
+        "name": "thespeedx-socks5",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt"
+      },
+      {
+        "name": "shiftytr-http",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt"
+      },
+      {
+        "name": "vakhov-http",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt"
+      },
+      {
+        "name": "vakhov-https",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/https.txt"
+      },
+      {
+        "name": "zloi-hideip-http",
+        "enabled": true,
+        "kind": "crlf",
+        "url": "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt"
+      },
+      {
+        "name": "iplocate-isp-range",
+        "enabled": true,
+        "kind": "range",
+        "url": "https://raw.githubusercontent.com/elliottophellia/yakumo/master/results/stream/ISP/US/all.txt"
+      },
+      {
+        "name": "iplocate-mobile",
+        "enabled": true,
+        "kind": "range",
+        "url": "https://raw.githubusercontent.com/elliottophellia/yakumo/master/results/stream/MOBILE/US/all.txt"
+      },
+      {
+        "name": "ISP-mass-range",
+        "enabled": false,
+        "kind": "range",
+        "url": "https://raw.githubusercontent.com/elliottophellia/yakumo/master/results/stream/HOSTING/US/all.txt"
+      }
     ]
   },
-
   "tester": {
     "_comment": "Three-stage verification. Stage 0 is a raw TCP pre-filter that kills most junk cheaply.",
     "concurrency": 900,
     "tcp_timeout": 3.0,
     "http_timeout": 8.0,
-    "quality_samples": 5,
+    "quality_samples": 3,
     "judge_url": "http://httpbin.org/ip",
     "geo_verify_url": "http://ip-api.com/json/?fields=query",
     "require_ip_change": true,
     "min_success_ratio": 0.5,
-    "max_latency_ms": 6000,
-    "reject_ports": [22, 25, 110, 143, 993, 995, 1433, 1521, 2375, 3306, 3389, 5432, 5900, 6379, 9200, 11211, 27017],
+    "max_latency_ms": 20000,
+    "reject_ports": [
+      22,
+      25,
+      110,
+      143,
+      993,
+      995,
+      1433,
+      1521,
+      2375,
+      3306,
+      3389,
+      5432,
+      5900,
+      6379,
+      9200,
+      11211,
+      27017
+    ],
     "reject_hostnames": [
-      "localhost", "localhost.localdomain", "metadata.google.internal",
-      "instance-data", "169.254.169.254"
+      "localhost",
+      "localhost.localdomain",
+      "metadata.google.internal",
+      "instance-data",
+      "169.254.169.254"
     ],
     "blacklist": {
       "enabled": true,
-      "zones": ["zen.spamhaus.org", "bl.spamcop.net", "b.barracudacentral.org", "dnsbl.sorbs.net", "cbl.abuseat.org", "dnsbl-1.uceprotect.net"],
+      "zones": [
+        "zen.spamhaus.org",
+        "bl.spamcop.net",
+        "b.barracudacentral.org",
+        "dnsbl.sorbs.net",
+        "cbl.abuseat.org",
+        "dnsbl-1.uceprotect.net"
+      ],
       "resolver": "1.1.1.1",
       "only_grade_b_or_better": true
     },
     "classification": {
       "_comment": "Residential = raw resnet/CGNAT, no proxy-software banner, ASN not in the DC list, not a public TSA port honeypot.",
-      "dc_asn_keywords": ["hosting", "host", "datacenter", "data center", "cloud", "server", "vps", "dedicated", "colocation", "colo", "idc", "amazon", "google", "microsoft", "alibaba", "oracle", "digitalocean", "linode", "vultr", "hetzner", "ovh", "contabo", "leaseweb", "equinix", "m247", "choopa", "frantech", "zeway", "aylik", "limestones", "datacamp", "cherry", "hosthigh", "pqdr", "dedi"],
-      "relay_banner_keywords": ["squid", "tinyproxy", "gost", "mitmproxy", "privoxy", "nginx", "caddy", "apache", "envoy", "haproxy", "frp", "goproxy", "v2ray", "vmess", "shadowsocks", "wireguard", "openvpn", "putty", "dropbear", "socat", "privoxy", "lanproxy", "rprx", "charles", "fiddler", "burp", "zap"],
-      "resnet_banner_keywords": ["boa", "goahead", "dlink", "netgear", "tplink", "linksys", "asus", "zyxel", "huawei", "zte", "mikrotik", "ubiquiti", "cisco", "juniper", "realtek", "busybox", "uhttpd", "lighttpd", "mini_httpd", "webserver", "eir_dslmodem", "technicolor", "arris", "sagemcom", "zte"],
-      "public_tsa_ports": [80, 443, 1080, 3128, 8000, 8080, 9110, 8443],
-      "tsa_banner_markers": ["tsa", "tis", "text/html; charset=iso-8859-1</html>", "<html><body><h1>It works!</h1>"]
-    }
+      "dc_asn_keywords": [
+        "hosting",
+        "host",
+        "datacenter",
+        "data center",
+        "cloud",
+        "server",
+        "vps",
+        "dedicated",
+        "colocation",
+        "colo",
+        "idc",
+        "amazon",
+        "google",
+        "microsoft",
+        "alibaba",
+        "oracle",
+        "digitalocean",
+        "linode",
+        "vultr",
+        "hetzner",
+        "ovh",
+        "contabo",
+        "leaseweb",
+        "equinix",
+        "m247",
+        "choopa",
+        "frantech",
+        "zeway",
+        "aylik",
+        "limestones",
+        "datacamp",
+        "cherry",
+        "hosthigh",
+        "pqdr",
+        "dedi"
+      ],
+      "relay_banner_keywords": [
+        "squid",
+        "tinyproxy",
+        "gost",
+        "mitmproxy",
+        "privoxy",
+        "nginx",
+        "caddy",
+        "apache",
+        "envoy",
+        "haproxy",
+        "frp",
+        "goproxy",
+        "v2ray",
+        "vmess",
+        "shadowsocks",
+        "wireguard",
+        "openvpn",
+        "putty",
+        "dropbear",
+        "socat",
+        "privoxy",
+        "lanproxy",
+        "rprx",
+        "charles",
+        "fiddler",
+        "burp",
+        "zap"
+      ],
+      "resnet_banner_keywords": [
+        "boa",
+        "goahead",
+        "dlink",
+        "netgear",
+        "tplink",
+        "linksys",
+        "asus",
+        "zyxel",
+        "huawei",
+        "zte",
+        "mikrotik",
+        "ubiquiti",
+        "cisco",
+        "juniper",
+        "realtek",
+        "busybox",
+        "uhttpd",
+        "lighttpd",
+        "mini_httpd",
+        "webserver",
+        "eir_dslmodem",
+        "technicolor",
+        "arris",
+        "sagemcom",
+        "zte"
+      ],
+      "public_tsa_ports": [
+        80,
+        443,
+        1080,
+        3128,
+        8000,
+        8080,
+        9110,
+        8443
+      ],
+      "tsa_banner_markers": [
+        "tsa",
+        "tis",
+        "text/html; charset=iso-8859-1</html>",
+        "<html><body><h1>It works!</h1>"
+      ]
+    },
+    "per_candidate_cap": 110.0
   },
-
   "geo": {
     "_comment": "ip-api batch: 100 IPs/POST, 15 req/min. ipwho.is is the fallback.",
     "batch_size": 100,
@@ -87,7 +356,6 @@
     "fallback": "https://ipwho.is",
     "cache_ttl_days": 14
   },
-
   "egress": {
     "_comment": "Consumer-side proxy endpoints. Local listeners bind 127.0.0.1 only.",
     "listen_host": "127.0.0.1",
@@ -102,7 +370,13 @@
     "browser": {
       "binary": "",
       "user_data_dir": "data/chrome-profile",
-      "extra_args": ["--no-first-run", "--no-default-browser-check", "--disable-features=Translate", "--password-store=basic", "--dns-prefetch-disable"]
+      "extra_args": [
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-features=Translate",
+        "--password-store=basic",
+        "--dns-prefetch-disable"
+      ]
     },
     "tunnel": {
       "_comment": "System-wide route. Requires an external TUN binary (sing-box or tun2socks). --dry-run prints only.",
@@ -120,14 +394,12 @@
       }
     }
   },
-
   "ui": {
     "bind": "127.0.0.1",
     "port": 8770,
     "open_browser": true,
     "auth_token": ""
   },
-
   "opsec": {
     "_comment": "Everything below is a local-handling setting. Nothing is sent anywhere except the probe URLs you name.",
     "persist_raw_bodies": false,

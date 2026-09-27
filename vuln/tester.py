@@ -30,7 +30,13 @@ from tooling.httpclient import (ConnectError, Endpoint, ProxyError, Session, _pa
                                 tcp_connect)
 from tooling.limiter import GlobalPacer, RateLimiter
 from tooling import logging_util as lu
+from contextvars import ContextVar
+
 from vuln.t_capthive import CaptureCheck
+
+# In-progress TestResult for the current task, so a wall-clock cap overrun can
+# still grade what was observed. Per-task, not per-tester.
+_inflight: ContextVar = ContextVar("resi_inflight", default=None)
 from vuln.t_leak import PortSweep, RelayProbe, is_tsa
 from vuln.t_tls import tls_suite
 from vuln.t_transparent import TransparencyProbe, extract_ip
@@ -143,9 +149,17 @@ class Tester:
         self.capture.sess.executor = self.executor
         self.sweep = PortSweep()
         self.judge_limiter = RateLimiter(per_host_rps=30, burst=60)
-        # pass0(3s)+pass1(5s)+pass2(8s)+pass3(~25s) worst case; cap below that so
-        # a half-open host cannot occupy a slot indefinitely
-        self.per_candidate_cap = self.tcp_to * 2 + self.http_to * 4
+        # pass0(tcp) + pass1(handshake) + pass2(samples x http_timeout + gaps)
+        # + pass3(geo/tls/relay/capture). The old cap was tcp*2 + http*4 = 38s,
+        # computed when pass2 ran ONE judge request. It now runs `samples`
+        # of them, so a slow-but-alive residential proxy (5-18s per request)
+        # blew the cap and got recorded as "exceeded cap" -> dead. The cap has
+        # to scale with the sample count, and a cap overrun must be graded on
+        # what was actually observed, not discarded.
+        self.per_candidate_cap = float(cfg.path(
+            "tester.per_candidate_cap",
+            self.tcp_to * 2 + self.http_to * (2 + self.samples * 2) + self.samples * 0.25,
+        ))
         self.stats = {"tried": 0, "tcp_ok": 0, "alive": 0, "graded": {}, "A": 0, "B": 0, "C": 0, "D": 0}
 
     # ----------------------------------------------------------------- pass 0
@@ -239,9 +253,33 @@ class Tester:
         return "C" if s >= 3.0 else "D"
 
     # ----------------------------------------------------------------- driver
+    def _capped(self, row) -> TestResult:
+        """Grade a candidate that ran out of wall clock.
+
+        If it already produced an exit IP before the cap, it is alive — just
+        slow. Discarding it (the old behaviour) turned every slow-but-working
+        residential proxy into a dead row, which is most of why the harvest
+        reported no residential exits. No exit IP means it genuinely never
+        proved anything, so it stays dead.
+        """
+        res = _inflight.get()
+        if res is not None and res.exit_ip:
+            res.verdict = "slow" if (res.latency_ms or 0) > self.max_lat else "alive"
+            res.error = f"slow: hit the {self.per_candidate_cap:.0f}s cap after proving an exit"
+            res.grade = self.grade(res)
+            return res
+        return TestResult(ep=Endpoint(row.host, int(row.port), row.scheme),
+                          verdict="dead", error=f"exceeded {self.per_candidate_cap}s cap")
+
     async def test_one(self, row) -> TestResult:
         ep = Endpoint(row.host, int(row.port), row.scheme, row.user or None, row.password or None)
         res = TestResult(ep=ep)
+        # Expose the in-progress result so a wall-clock cap overrun can grade
+        # what was actually observed rather than throwing the work away. A slow
+        # residential proxy that answered the judge before the cap is alive,
+        # not dead. A ContextVar keeps this per-task: a plain attribute would be
+        # clobbered by every other concurrent worker.
+        _inflight.set(res)
         self.stats["tried"] += 1
         if not await self.tcp_alive(ep):
             res.verdict, res.error = "dead", "tcp timeout/refused"
@@ -311,8 +349,7 @@ class Tester:
                     # hold a slot through every stage's timeout in series
                     r = await asyncio.wait_for(self.test_one(row), self.per_candidate_cap)
                 except (asyncio.TimeoutError, TimeoutError):
-                    r = TestResult(ep=Endpoint(row.host, int(row.port), row.scheme),
-                                   verdict="dead", error=f"exceeded {self.per_candidate_cap}s cap")
+                    r = self._capped(row)
                 except Exception as e:
                     r = TestResult(ep=Endpoint(row.host, int(row.port), row.scheme),
                                    verdict="dead", error=f"{type(e).__name__}: {str(e)[:100]}")
