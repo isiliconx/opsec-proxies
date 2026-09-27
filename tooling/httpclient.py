@@ -276,6 +276,21 @@ async def http_connect(host: str, port: int, dst_host: str, dst_port: int,
         raise
 
 
+async def http_open(host: str, port: int, user: str | None, pw: str | None,
+                    timeout: float) -> tuple:
+    """Bare connection to an http proxy, no CONNECT. For absolute-form requests."""
+    reader, writer = await tcp_connect(host, port, timeout)
+    try:
+        if user:
+            tok = base64.b64encode(f"{user}:{pw or ''}".encode()).decode()
+            writer.write(f"Proxy-Authorization: Basic {tok}\r\n".encode())
+            await writer.drain()
+        return reader, writer, b""
+    except Exception:
+        writer.close()
+        raise
+
+
 async def direct_connect(host: str, port: int, timeout: float, executor=None) -> tuple:
     r, w = await tcp_connect(host, port, timeout, executor)
     return r, w, b""

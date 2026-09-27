@@ -13,8 +13,8 @@ import time
 from dataclasses import dataclass, field
 
 from .httpclient import (ConnectError, Endpoint, HTTPStatusError, ProxyError, Response,
-                         Session, _parse_status, _read_head, http_connect, socks4_connect,
-                         socks5_connect, tunnel)
+                         Session, _parse_status, _read_head, http_connect, http_open,
+                         socks4_connect, socks5_connect, tunnel)
 import struct
 
 # Well-known ports, and ranges that are never a browser's proxy port.
@@ -77,16 +77,18 @@ class Rotator:
             return sorted(live, key=lambda u: -u.score)
         return sorted(live, key=lambda u: (-u.health(), -u.score, -u.last_ok))
 
-    def pick(self, session_id: str | None = None) -> Upstream | None:
+    def pick(self, session_id: str | None = None, exclude: set[str] | None = None) -> Upstream | None:
         if not self.pool:
             return None
+        exclude = exclude or set()
         if session_id:
             u = self._sticky.get(session_id)
-            if u and u.available():
+            if u and u.available() and u.ep.key not in exclude:
                 return u
         live = self._ranked()
         if not live:
             return None
+        live = [u for u in live if u.ep.key not in exclude] or live
         # top 30% by health, weighted random inside it
         window = max(1, min(len(live), int(len(live) * 0.3) + 1))
         top = live[:window]
@@ -136,7 +138,8 @@ class ProxyServer:
 
     def __init__(self, rotator: Rotator, host: str = "127.0.0.1", port: int = 2080,
                  mode: str = "mixed", auth: tuple[str, str] | None = None,
-                 session_header: str = "x-resi-session", listen_sessions: bool = True):
+                 session_header: str = "x-resi-session", listen_sessions: bool = True,
+                 attempts: int = 4):
         self.rot = rotator
         self.host = host
         self.port = port
@@ -146,6 +149,10 @@ class ProxyServer:
         self.sessions: dict[str, Upstream] = {}
         self.session_header_map: dict[str, str] = {}
         self.listen_sessions = listen_sessions
+        # How many distinct upstreams one client connection may walk through
+        # before it gives up. Open proxies die mid-session constantly, so a
+        # single bad upstream must not end a browser's connection.
+        self.attempts = max(1, int(attempts))
         self.server: asyncio.Server | None = None
         self._session_pool = Session(timeout=30, pool_size=2)
         self.counters = {"socks_conn": 0, "http_conn": 0, "bind_fail": 0, "upstream_err": 0, "bytes": 0}
@@ -171,7 +178,7 @@ class ProxyServer:
                 if head.startswith((b"CONNECT", b"GET ", b"POST ", b"PUT ", b"HEAD ")):
                     await self._http_server(reader, writer, head)
                     return
-            if self.mode in ("socks", "mixed"):
+            if self.mode in ("socks", "socks4", "socks5", "mixed"):
                 await self._socks_server(reader, writer)
                 return
             writer.close()
@@ -290,7 +297,11 @@ class ProxyServer:
             if b":" in ln:
                 k, _, v = ln.partition(b":")
                 hdrs[k.decode("latin-1").strip().lower()] = v.decode("latin-1").strip()
-        sid = hdrs.get(self.session_header) or f"{method}:{target}"
+        # Sticky sessions are opt-in: only an explicit X-Resi-Session header pins an
+        # upstream. Keying on the origin host instead would pin every connection a
+        # browser opens to that host to one upstream for the whole sticky window,
+        # which is exactly what breaks multi-connection clients like Chrome.
+        sid = hdrs.get(self.session_header) or None
         u = self.rot.pick(sid)
         if u is None:
             writer.write(b"HTTP/1.1 503 No upstream available\r\nContent-Length: 0\r\n\r\n")
@@ -303,7 +314,19 @@ class ProxyServer:
             c_host, _, c_port_s = target.rpartition(":")
             c_host = c_host.strip("[]") or target
             c_port = int(c_port_s) if c_port_s.isdigit() else 443
-            up = await self._open_upstream(u, c_host, c_port)
+            up = None
+            for _ in range(self.attempts):
+                up = await self._open_upstream(u, c_host, c_port)
+                if up is not None:
+                    break
+                self.counters["upstream_err"] += 1
+                self.rot.report(u, False, "connect failed", sid)
+                tried = {u.ep.key}
+                nxt = self.rot.pick(sid, exclude=tried)
+                if nxt is None:
+                    break
+                u.in_use += 1
+                u = nxt
             if up is None:
                 writer.write(b"HTTP/1.1 502 upstream failed\r\nContent-Length: 0\r\n\r\n")
                 await writer.drain()
@@ -339,29 +362,47 @@ class ProxyServer:
         if not any(l.lower().startswith("content-length:") for l in out) and method in ("POST", "PUT", "PATCH"):
             out.append("Content-Length: 0")
         raw = ("\r\n".join(out) + "\r\n\r\n").encode("latin-1")
-        try:
-            up = await self._open_upstream_raw(u, host, port, raw)
-            if up is None:
-                writer.write(b"HTTP/1.1 502 upstream failed\r\nContent-Length: 0\r\n\r\n")
-                await writer.drain()
-                writer.close()
-                return
-            first_resp = await asyncio.wait_for(_read_head(up[0]), 20)
-            code, reason, _ = _parse_status(first_resp)
-            if code >= 500:
-                raise ConnectError(f"upstream {code}")
-            writer.write(first_resp)
-            await writer.drain()
-            self.counters["bytes"] += await self._pump(u, *up, reader, writer)
-            self.rot.report(u, True, sid=sid)
-        except Exception as e:
-            self.counters["upstream_err"] += 1
-            self.rot.report(u, False, f"{type(e).__name__}:{e}", sid)
-        finally:
+        # Failover: walk up to ATTEMPT upstreams before giving up. One dead
+        # upstream must not end a client connection.
+        tried: set[str] = set()
+        for _ in range(self.attempts):
+            up = None
             try:
-                writer.close()
-            except Exception:
-                pass
+                up = await self._open_upstream_raw(u, host, port, raw)
+                if up is None:
+                    raise ConnectError("upstream open failed")
+                first_resp = await asyncio.wait_for(_read_head(up[0]), 20)
+                code, reason, _ = _parse_status(first_resp)
+                if code >= 500:
+                    raise ConnectError(f"upstream {code}")
+                writer.write(first_resp)
+                await writer.drain()
+                self.counters["bytes"] += await self._pump(u, *up, reader, writer)
+                self.rot.report(u, True, sid=sid)
+                return
+            except Exception as e:
+                self.counters["upstream_err"] += 1
+                self.rot.report(u, False, f"{type(e).__name__}:{e}", sid)
+                if up is not None:
+                    try:
+                        up[1].close()
+                    except Exception:
+                        pass
+                tried.add(u.ep.key)
+                nxt = self.rot.pick(sid, exclude=tried)
+                if nxt is None:
+                    break
+                u.in_use += 1
+                u = nxt
+        try:
+            writer.write(b"HTTP/1.1 502 upstream failed\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+        except Exception:
+            pass
+        try:
+            writer.close()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------- upstream plumbing
     async def _open_upstream(self, u: Upstream, host: str, port: int) -> tuple | None:
@@ -378,15 +419,30 @@ class ProxyServer:
             return None
 
     async def _open_upstream_raw(self, u: Upstream, host: str, port: int, first_request: bytes) -> tuple | None:
-        """Open a tunnel and push the already-parsed request down it."""
+        """Open a tunnel and push the already-parsed request down it.
+
+        A plain-HTTP request must NOT be sent as CONNECT. An http upstream wants
+        the request itself in absolute-form on a bare connection; only a socks
+        upstream gets a real CONNECT, with the request bytes following it.
+        """
         try:
             if u.ep.scheme in ("socks5", "socks4"):
                 r, w, _ = await tunnel(u.ep, host, port, 10)
-            else:
-                # an http upstream wants the absolute-form request verbatim
-                r, w, _ = await http_connect(u.ep.host, u.ep.port, host, port, u.ep.user, u.ep.password, 10)
+                if first_request:
+                    w.write(first_request)
+                    await w.drain()
+                return r, w
+            # http/https upstream: bare connection to the proxy, no CONNECT.
+            r, w, _ = await http_open(u.ep.host, u.ep.port, u.ep.user, u.ep.password, 10)
             if first_request:
-                w.write(first_request)
+                head, _, rest = first_request.partition(b"\r\n")
+                parts = head.decode("latin-1").split(" ")
+                if len(parts) >= 2 and not parts[1].startswith(("http://", "https://")):
+                    scheme = "https" if port == 443 else "http"
+                    netloc = host if port in (80, 443) else f"{host}:{port}"
+                    parts[1] = f"{scheme}://{netloc}{parts[1]}"
+                    head = " ".join(parts).encode("latin-1")
+                w.write(head + b"\r\n" + rest)
                 await w.drain()
             return r, w
         except Exception:

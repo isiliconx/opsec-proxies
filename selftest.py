@@ -296,14 +296,25 @@ async def main() -> int:
         sess = Session(timeout=15)
         for label, url in (("via local socks listener", "http://httpbin.org/ip"),
                            ("via local http listener", "http://httpbin.org/ip")):
-            ep = Endpoint(HOST, st["listeners"]["socks5"].split(":")[-1] and int(st["listeners"]["socks5"].split(":")[-1]),
-                          "socks5") if "socks" in label else Endpoint(HOST, int(st["listeners"]["http"].split(":")[-1]), "http")
-            try:
-                r = await sess.get(ep, url)
-                ok = r.status == 200 and "origin" in r.text(200)
-                print(f"      {label}: {r.status} {'OK' if ok else 'unexpected'} {r.text(60)!r}")
-            except Exception as e:
-                print(f"      {label}: FAIL {type(e).__name__}: {str(e)[:80]}")
+            port = int(st["listeners"]["socks5" if "socks" in label else "http"].split(":")[-1])
+            ep = Endpoint(HOST, port, "socks5" if "socks" in label else "http")
+            # A browser retries; so does this. A single open proxy failing one
+            # request is expected behaviour, not a listener defect.
+            last = ""
+            for attempt in range(1, 7):
+                try:
+                    r = await sess.get(ep, url)
+                    ok = r.status == 200 and "origin" in r.text(200)
+                    if ok:
+                        print(f"      {label}: {r.status} OK {r.text(60)!r} (attempt {attempt})")
+                        break
+                    last = f"{r.status} {r.text(60)!r}"
+                except Exception as e:
+                    last = f"{type(e).__name__}: {str(e)[:80]}"
+                if attempt < 6:
+                    print(f"      {label}: attempt {attempt} -> {last}, retrying")
+            else:
+                print(f"      {label}: FAIL after 6 attempts: {last}")
                 rc = 1
         # api
         try:
